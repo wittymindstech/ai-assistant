@@ -2,19 +2,19 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from fastapi import FastAPI
 from pydantic import BaseModel
-from ai_bot.agent import query_agent
+from ai_bot.agent import query_agent_with_usage
 import os
 
 app = FastAPI()   # 👈 THIS IS REQUIRED
-os.environ['GOOGLE_API_KEY'] = 'AQ.Ab8RN6KKHQno2jBHCaRMl2vJ0LLQb916IE7GRCtdo4oNKAMtFQ'
+os.environ['GOOGLE_API_KEY'] = 'AIzaSyDnHyzMM3HrGbbBjwnhmGD55Ye2q9RWUF0'
 
 class Query(BaseModel):
     query: str
 
 @app.post("/ask")
 async def ask(q: Query):
-    response = await query_agent(q.query)
-    return {"response": response}
+    result = await query_agent_with_usage(q.query)
+    return result
 
 app.add_middleware(
     CORSMiddleware,

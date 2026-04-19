@@ -3,11 +3,18 @@ import re
 import logging
 import json
 import zipfile
+import base64
 from PIL import Image
 import pytesseract
 from pypdf import PdfReader
+import google.genai as genai
 
 logger = logging.getLogger(__name__)
+
+# Initialize Gemini for vision analysis
+api_key = os.environ.get('GOOGLE_API_KEY')
+if api_key:
+    genai.configure(api_key=api_key)
 
 
 def _extract_text_from_pages(file_path: str) -> str:
@@ -121,9 +128,57 @@ def search_pdfs(query: str) -> str:
         return f"Error searching documents: {str(e)}"
 
 
-# 🖼️ OCR tool (images + handwritten)
+# 🖼️ Vision analysis - detect objects and people
+def _analyze_image_with_vision(image_path: str) -> str:
+    """Analyze an image using Gemini's vision capabilities to detect objects, people, and other elements."""
+    try:
+        # Read and prepare the image
+        with open(image_path, 'rb') as img_file:
+            image_data = base64.standard_b64encode(img_file.read()).decode('utf-8')
+        
+        # Determine MIME type from file extension
+        ext = os.path.splitext(image_path)[1].lower()
+        mime_type_map = {
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.png': 'image/png',
+            '.gif': 'image/gif',
+            '.bmp': 'image/bmp',
+            '.webp': 'image/webp',
+        }
+        mime_type = mime_type_map.get(ext, 'image/jpeg')
+        
+        # Use Gemini to analyze the image
+        client = genai.Client()
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=[
+                {
+                    'role': 'user',
+                    'parts': [
+                        {
+                            'inline_data': {
+                                'mime_type': mime_type,
+                                'data': image_data
+                            }
+                        },
+                        'Please analyze this image and provide: 1) Count and identify any people (e.g., "2 people standing"), 2) List all visible objects and items, 3) Brief description of the scene. Format the response clearly.'
+                    ]
+                }
+            ]
+        )
+        
+        if response.candidates:
+            return response.candidates[0].content.parts[0].text
+        return "No analysis available"
+    except Exception as e:
+        logger.error(f"Error analyzing image with vision: {str(e)}")
+        return f"Vision analysis error: {str(e)}"
+
+
+# 🖼️ Search images - OCR + vision analysis
 def search_images(query: str) -> str:
-    """Search through images using OCR for matching content."""
+    """Search through images using OCR and vision analysis to detect objects, people, and text."""
     results = []
     
     try:
@@ -131,31 +186,87 @@ def search_images(query: str) -> str:
         if not os.path.exists(img_dir):
             return "Images directory not found"
         
-        if not os.listdir(img_dir):
-            return "No images available"
+        images = [f for f in os.listdir(img_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp'))]
+        if not images:
+            return "No images available in data/images/"
         
-        for file in os.listdir(img_dir):
-            if not file.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp')):
-                continue
+        for file in sorted(images):
+            file_path = os.path.join(img_dir, file)
+            result_entry = f"\n📷 {file}:\n"
+            match_found = False
             
+            # 1. OCR-based text search
             try:
-                file_path = os.path.join(img_dir, file)
                 img = Image.open(file_path)
-                text = pytesseract.image_to_string(img)
+                ocr_text = pytesseract.image_to_string(img)
                 
-                if text and query.lower() in text.lower():
-                    results.append(f"[From {file}] {text[:500]}")
+                if ocr_text and query.lower() in ocr_text.lower():
+                    result_entry += f"  [OCR Text Match] {ocr_text[:300]}\n"
+                    match_found = True
             except Exception as e:
-                logger.error(f"Error processing image {file}: {str(e)}")
-                continue
+                logger.error(f"Error running OCR on {file}: {str(e)}")
+            
+            # 2. Vision-based object and people detection
+            try:
+                vision_analysis = _analyze_image_with_vision(file_path)
+                result_entry += f"  [Vision Analysis]\n{vision_analysis}\n"
+                
+                # Check if query matches vision analysis (for objects, people, etc.)
+                if query.lower() in vision_analysis.lower():
+                    match_found = True
+            except Exception as e:
+                logger.error(f"Error with vision analysis for {file}: {str(e)}")
+            
+            if match_found or not results:  # Include first image's analysis even if no match
+                results.append(result_entry)
         
-        return "\n".join(results) if results else "No matching content found in images"
+        return "".join(results) if results else "No matching content found"
     except Exception as e:
         logger.error(f"Error in search_images: {str(e)}")
         return f"Error searching images: {str(e)}"
 
 
-# 🔗 Extract links
+# � Detect objects and people in images
+def detect_objects_and_people(query: str = "all") -> str:
+    """Analyze all images in data/images to detect and count people, objects, and other elements."""
+    results = []
+    
+    try:
+        img_dir = "data/images"
+        if not os.path.exists(img_dir):
+            return "Images directory not found"
+        
+        images = [f for f in os.listdir(img_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp'))]
+        if not images:
+            return "No images available in data/images/"
+        
+        for file in sorted(images):
+            file_path = os.path.join(img_dir, file)
+            
+            try:
+                # Use vision analysis to detect objects and people
+                analysis = _analyze_image_with_vision(file_path)
+                result = f"\n📷 {file}:\n{analysis}"
+                
+                # Filter results if specific query provided
+                if query.lower() != "all" and query.lower() not in analysis.lower():
+                    continue
+                
+                results.append(result)
+            except Exception as e:
+                logger.error(f"Error analyzing {file}: {str(e)}")
+                results.append(f"\n📷 {file}: Error - {str(e)}")
+        
+        if not results and query.lower() != "all":
+            return f"No images found matching '{query}'. Run with 'all' to see all analyses."
+        
+        return "".join(results) if results else "No images available"
+    except Exception as e:
+        logger.error(f"Error in detect_objects_and_people: {str(e)}")
+        return f"Error detecting objects: {str(e)}"
+
+
+# �🔗 Extract links
 def extract_links(text: str) -> str:
     """Extract URLs from the given text."""
     try:
