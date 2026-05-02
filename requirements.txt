@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+pydantic
+google-adk
+google-genai
+pypdf
+pillow
+pytesseract
+aiokafka
+psutil
