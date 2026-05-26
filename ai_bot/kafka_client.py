@@ -1,14 +1,15 @@
 import json
-import os
 import logging
 from typing import Any, Dict, Optional
 
+from config import Config
+
 logger = logging.getLogger(__name__)
 
-KAFKA_DEFAULT_BOOTSTRAP_SERVERS = "localhost:9092"
-KAFKA_TASK_TOPIC = "assistant_tasks"
-KAFKA_RESPONSE_TOPIC = "assistant_responses"
-KAFKA_CONSUMER_GROUP = "assistant_agent_group"
+KAFKA_DEFAULT_BOOTSTRAP_SERVERS = Config.KAFKA_BOOTSTRAP_SERVERS
+KAFKA_TASK_TOPIC = Config.KAFKA_TASK_TOPIC
+KAFKA_RESPONSE_TOPIC = Config.KAFKA_RESPONSE_TOPIC
+KAFKA_CONSUMER_GROUP = Config.KAFKA_CONSUMER_GROUP
 
 
 def kafka_enabled() -> bool:

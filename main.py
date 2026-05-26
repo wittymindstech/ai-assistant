@@ -1,11 +1,11 @@
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel
-import os
 import time
 import logging
 from datetime import datetime
 
+from config import Config
 from ai_bot.agent import query_agent_with_usage
 from ai_bot.queue import PromptQueueManager
 
@@ -17,17 +17,20 @@ from observability.logging import genai_logger
 from observability.monitor import genai_monitor
 
 app = FastAPI(title="AI Assistant API", version="1.0.0")
-os.environ['GOOGLE_API_KEY'] = 'AIzaSyDnHyzMM3HrGbbBjwnhmGD55Ye2q9RWUF0'
 
 # Add observability middleware
 app.add_middleware(GenAIMiddleware, metrics_collector=metrics_collector)
 
 queue_manager = PromptQueueManager()
 
+allow_origins = Config.ALLOW_ORIGINS
+if allow_origins == ["*"]:
+    allow_origins = ["*"]
+
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
+    allow_origins=allow_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -9,12 +9,13 @@ import pytesseract
 from pypdf import PdfReader
 import google.genai as genai
 
+from config import Config
+
 logger = logging.getLogger(__name__)
 
 # Initialize Gemini for vision analysis
-api_key = os.environ.get('GOOGLE_API_KEY')
-if api_key:
-    genai.configure(api_key=api_key)
+if Config.GOOGLE_API_KEY:
+    genai.configure(api_key=Config.GOOGLE_API_KEY)
 
 
 def _extract_text_from_pages(file_path: str) -> str:

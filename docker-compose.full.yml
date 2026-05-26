@@ -62,11 +62,14 @@ services:
     ports:
       - "8001:8001"
     environment:
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-AIzaSyDnHyzMM3HrGbbBjwnhmGD55Ye2q9RWUF0}
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_TASK_TOPIC: assistant_tasks
       KAFKA_RESPONSE_TOPIC: assistant_responses
       KAFKA_CONSUMER_GROUP: assistant_agent_group
+      API_BASE_URL: http://localhost:8001
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
       - ./data/pdfs:/app/data/pdfs
       - ./data/images:/app/data/images
@@ -88,7 +91,7 @@ services:
     ports:
       - "4200:4000"
     environment:
-      API_BASE_URL: http://localhost:8001
+      API_BASE_URL: http://ai-assistant:8001
     networks:
       - ai-network
     healthcheck:

@@ -5,7 +5,12 @@
 
 set -e
 
-export GOOGLE_API_KEY="${GOOGLE_API_KEY:-AIzaSyDnHyzMM3HrGbbBjwnhmGD55Ye2q9RWUF0}"
+if [ -z "${GOOGLE_API_KEY:-}" ]; then
+  echo "❌ GOOGLE_API_KEY is required to run with Kafka. Set it before running this script."
+  exit 1
+fi
+
+export ENVIRONMENT="production"
 export KAFKA_BOOTSTRAP_SERVERS="localhost:9092"
 export KAFKA_TASK_TOPIC="assistant_tasks"
 export KAFKA_RESPONSE_TOPIC="assistant_responses"

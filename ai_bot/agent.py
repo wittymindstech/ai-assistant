@@ -4,18 +4,18 @@ import os
 import logging
 from typing import Optional, Dict, Any, Tuple
 
+from config import Config
+
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-# Set API key
-api_key = os.environ.get('GOOGLE_API_KEY')
+# Set API key from config
+api_key = Config.GOOGLE_API_KEY
 if not api_key:
-    logger.warning("GOOGLE_API_KEY environment variable not set")
-    # Try to load from environment or config
-    api_key = ''
-
-os.environ['GOOGLE_API_KEY'] = api_key
+    logger.warning("GOOGLE_API_KEY is not configured. Gemini requests may fail.")
+else:
+    os.environ['GOOGLE_API_KEY'] = api_key
 
 try:
     from tools import search_pdfs, search_images, extract_links, detect_objects_and_people

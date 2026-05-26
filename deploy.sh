@@ -25,7 +25,12 @@ fi
 echo "✅ Docker is running"
 
 # Set environment variables
-export GOOGLE_API_KEY="${GOOGLE_API_KEY:-AIzaSyDnHyzMM3HrGbbBjwnhmGD55Ye2q9RWUF0}"
+if [ -z "${GOOGLE_API_KEY:-}" ]; then
+  echo "❌ GOOGLE_API_KEY is required for deployment. Set it before running deploy.sh."
+  exit 1
+fi
+
+export ENVIRONMENT="production"
 
 echo "🔧 Building and starting all services..."
 

@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ai-assistant-config
+  namespace: ai-assistant
+data:
+  KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
+  KAFKA_TASK_TOPIC: "assistant_tasks"
+  KAFKA_RESPONSE_TOPIC: "assistant_responses"
+  KAFKA_CONSUMER_GROUP: "assistant_agent_group"
+  API_BASE_URL: "http://ai-assistant-service:8001"

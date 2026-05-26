@@ -1,0 +1,78 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-assistant
+  namespace: ai-assistant
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ai-assistant
+  template:
+    metadata:
+      labels:
+        app: ai-assistant
+    spec:
+      containers:
+      - name: ai-assistant
+        image: your-registry/ai-assistant:latest  # Replace with your container registry
+        ports:
+        - containerPort: 8001
+        env:
+        - name: GOOGLE_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: ai-assistant-secrets
+              key: google-api-key
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          valueFrom:
+            configMapKeyRef:
+              name: ai-assistant-config
+              key: KAFKA_BOOTSTRAP_SERVERS
+        - name: KAFKA_TASK_TOPIC
+          valueFrom:
+            configMapKeyRef:
+              name: ai-assistant-config
+              key: KAFKA_TASK_TOPIC
+        - name: KAFKA_RESPONSE_TOPIC
+          valueFrom:
+            configMapKeyRef:
+              name: ai-assistant-config
+              key: KAFKA_RESPONSE_TOPIC
+        - name: KAFKA_CONSUMER_GROUP
+          valueFrom:
+            configMapKeyRef:
+              name: ai-assistant-config
+              key: KAFKA_CONSUMER_GROUP
+        volumeMounts:
+        - name: data-volume
+          mountPath: /app/data
+        livenessProbe:
+          httpGet:
+            path: /queue
+            port: 8001
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /queue
+            port: 8001
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: data-volume
+        persistentVolumeClaim:
+          claimName: ai-assistant-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-assistant-service
+  namespace: ai-assistant
+spec:
+  selector:
+    app: ai-assistant
+  ports:
+  - port: 8001
+    targetPort: 8001
+  type: ClusterIP
