@@ -6,6 +6,7 @@ import logging
 from datetime import datetime
 
 from config import Config
+from guardrails import GuardRailViolation, enforce_prompt_guardrails
 from ai_bot.agent import query_agent_with_usage
 from ai_bot.queue import PromptQueueManager
 
@@ -60,6 +61,11 @@ async def shutdown_event():
 @app.post("/ask")
 async def ask(q: Query, request: Request):
     request_id = getattr(request.state, 'request_id', 'unknown')
+
+    try:
+        enforce_prompt_guardrails(q.query)
+    except GuardRailViolation as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     # Log incoming request
     genai_logger.log_request(
@@ -129,6 +135,11 @@ async def ask(q: Query, request: Request):
 
 @app.post("/enqueue")
 async def enqueue(q: QueueRequest):
+    try:
+        enforce_prompt_guardrails(q.query)
+    except GuardRailViolation as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     task = await queue_manager.enqueue(
         prompt=q.query,
         assistant_id=q.assistant_id,

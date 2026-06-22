@@ -5,14 +5,18 @@
 
 set -e
 
-echo "🛍️  Starting Angular Ecommerce Frontend (Development)"
-echo "==================================================="
+BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$BASE_DIR/ecommerce-bot"
 
-cd ecommerce-bot
-
-# Check if node_modules exists
+# Install dependencies if needed
 if [ ! -d "node_modules" ]; then
     echo "📦 Installing dependencies..."
+    npm install
+fi
+
+FRONTEND_CLI="./node_modules/@angular/cli/bin/ng"
+if [ ! -x "$FRONTEND_CLI" ]; then
+    echo "📦 Angular CLI not found in node_modules. Installing dependencies..."
     npm install
 fi
 
@@ -24,4 +28,4 @@ echo ""
 echo "Press Ctrl+C to stop"
 echo ""
 
-npm start
+exec node "$FRONTEND_CLI" serve --proxy-config proxy.conf.json --host 0.0.0.0 --port 4200

@@ -2,6 +2,8 @@
 
 An intelligent document search and analysis agent powered by Google's Agent Development Kit (ADK) and Gemini 2.5 Flash.
 
+![Ecommerce Products Bot Screenshot](./ecom-bot.png)
+
 ## Features
 
 - **Document Search**: Search through PDF documents and Apple Pages files in `data/pdfs/`

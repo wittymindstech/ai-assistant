@@ -8,3 +8,4 @@ pillow
 pytesseract
 aiokafka
 psutil
+boto3

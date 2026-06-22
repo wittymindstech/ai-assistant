@@ -70,9 +70,8 @@ services:
       KAFKA_CONSUMER_GROUP: assistant_agent_group
       API_BASE_URL: http://localhost:8001
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    volumes:
-      - ./data/pdfs:/app/data/pdfs
-      - ./data/images:/app/data/images
+    # Data is stored in S3 in production; avoid local mounts here.
+    # For development you can mount local directories or set S3 emulation.
     networks:
       - ai-network
     healthcheck:

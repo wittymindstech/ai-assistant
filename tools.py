@@ -4,6 +4,13 @@ import logging
 import json
 import zipfile
 import base64
+import tempfile
+from io import BytesIO
+from pathlib import Path
+from typing import List
+
+import boto3
+from botocore.exceptions import ClientError
 from PIL import Image
 import pytesseract
 from pypdf import PdfReader
@@ -11,145 +18,148 @@ import google.genai as genai
 
 from config import Config
 
+ROOT_DIR = Path(__file__).resolve().parent
+DATA_ROOT = ROOT_DIR / "data" if (ROOT_DIR / "data").exists() else ROOT_DIR.parent / "data"
+PDFS_DIR = DATA_ROOT / "pdfs"
+IMAGES_DIR = DATA_ROOT / "images"
+
 logger = logging.getLogger(__name__)
 
-# Initialize Gemini for vision analysis
-if Config.GOOGLE_API_KEY:
-    genai.configure(api_key=Config.GOOGLE_API_KEY)
+# S3 client (uses IAM role or environment credentials)
+_s3 = boto3.client('s3') if Config.S3_BUCKET else None
 
 
-def _extract_text_from_pages(file_path: str) -> str:
-    """Extract text content from Apple Pages (.pages) files."""
+def _list_s3_objects(prefix: str) -> List[dict]:
+    if Config.S3_BUCKET and _s3:
+        paginator = _s3.get_paginator('list_objects_v2')
+        objs = []
+        try:
+            for page in paginator.paginate(Bucket=Config.S3_BUCKET, Prefix=prefix):
+                for item in page.get('Contents', []):
+                    objs.append(item)
+        except ClientError as e:
+            logger.error(f"S3 list error for prefix {prefix}: {e}")
+        return objs
+
+    search_dir = PDFS_DIR if prefix.startswith('pdfs') else IMAGES_DIR if prefix.startswith('images') else DATA_ROOT / prefix
+    if not search_dir.exists():
+        return []
+
+    objs = []
+    for file_path in sorted(search_dir.rglob('*')):
+        if file_path.is_file():
+            key = str(file_path.relative_to(DATA_ROOT)).replace(os.sep, '/')
+            objs.append({'Key': key})
+    return objs
+
+
+def _get_s3_object_bytes(key: str) -> bytes:
+    if Config.S3_BUCKET and _s3:
+        try:
+            resp = _s3.get_object(Bucket=Config.S3_BUCKET, Key=key)
+            return resp['Body'].read()
+        except ClientError as e:
+            logger.error(f"Failed to get S3 object {key}: {e}")
+            raise
+
+    if key.startswith('s3://'):
+        key = key.split('s3://', 1)[-1]
+
+    local_path = DATA_ROOT / key
+    if local_path.exists():
+        return local_path.read_bytes()
+
+    raise RuntimeError("S3 is not configured. Set S3_BUCKET in environment or provide local data files.")
+
+
+def _extract_text_from_pages_bytes(data: bytes) -> str:
     try:
-        with zipfile.ZipFile(file_path, 'r') as pages_zip:
-            # Try to read the index.json or document.json files
+        with zipfile.ZipFile(BytesIO(data), 'r') as pages_zip:
             try:
                 if 'index.json' in pages_zip.namelist():
                     with pages_zip.open('index.json') as f:
-                        data = json.load(f)
-                        if isinstance(data, dict) and 'documentMetadata' in data:
-                            return json.dumps(data, indent=2)[:2000]
-            except:
+                        parsed = json.load(f)
+                        if isinstance(parsed, dict) and 'documentMetadata' in parsed:
+                            return json.dumps(parsed, indent=2)[:2000]
+            except Exception:
                 pass
-            
-            # Extract plain text if available
+
             text_content = []
             for name in pages_zip.namelist():
                 if name.endswith('.txt'):
                     try:
                         with pages_zip.open(name) as f:
                             text_content.append(f.read().decode('utf-8', errors='ignore'))
-                    except:
+                    except Exception:
                         continue
-            
+
             if text_content:
                 return '\n'.join(text_content)[:2000]
-            
-            # If no plain text, return file info
+
             return f"Pages file detected. Files in archive: {', '.join(pages_zip.namelist()[:5])}"
     except Exception as e:
-        logger.error(f"Error extracting from Pages file: {str(e)}")
+        logger.error(f"Error extracting from Pages bytes: {str(e)}")
         return f"Error reading Pages file: {str(e)}"
 
 
-def _get_available_documents() -> str:
-    """Get a list of available documents in data/pdfs directory."""
-    try:
-        pdf_dir = "data/pdfs"
-        if not os.path.exists(pdf_dir):
-            return "PDF directory not found"
-        
-        files = os.listdir(pdf_dir)
-        if not files:
-            return "No documents available in data/pdfs/"
-        
-        file_info = []
-        for f in sorted(files):
-            if os.path.isfile(os.path.join(pdf_dir, f)):
-                ext = os.path.splitext(f)[1].lower()
-                file_info.append(f"{f} ({ext})")
-        
-        return "Available documents: " + ", ".join(file_info) if file_info else "No documents found"
-    except Exception as e:
-        return f"Error listing documents: {str(e)}"
+def _get_available_documents_s3() -> str:
+    objs = _list_s3_objects(Config.S3_PREFIX_PDFS)
+    if not objs:
+        return "No documents available in S3 pdfs/"
+    file_info = [os.path.basename(o.get('Key', '')) for o in objs]
+    return "Available documents: " + ", ".join(file_info[:50])
 
 
-# 📄 PDF search tool
 def search_pdfs(query: str) -> str:
-    """Search through PDF documents and other supported formats for matching content."""
     results = []
-    
     try:
-        pdf_dir = "data/pdfs"
-        if not os.path.exists(pdf_dir):
-            return "PDF directory not found. " + _get_available_documents()
-        
-        files = os.listdir(pdf_dir)
-        if not files:
-            return "No documents available. " + _get_available_documents()
-        
-        for file in sorted(files):
-            file_path = os.path.join(pdf_dir, file)
-            
-            if not os.path.isfile(file_path):
+        objs = _list_s3_objects(Config.S3_PREFIX_PDFS)
+        if not objs:
+            return "No documents available in S3 pdfs/"
+
+        for o in sorted(objs, key=lambda x: x.get('Key', '')):
+            key = o.get('Key')
+            if not key:
                 continue
-            
-            ext = os.path.splitext(file)[1].lower()
-            
-            # Handle PDF files
+            name = os.path.basename(key)
+            ext = os.path.splitext(name)[1].lower()
+
             if ext == '.pdf':
                 try:
-                    reader = PdfReader(file_path)
-                    for page_num, page in enumerate(reader.pages):
-                        text = page.extract_text()
-                        if text and query.lower() in text.lower():
-                            results.append(f"[PDF: {file}, page {page_num+1}] {text[:500]}")
+                    data = _get_s3_object_bytes(key)
+                    with BytesIO(data) as b:
+                        reader = PdfReader(b)
+                        for page_num, page in enumerate(reader.pages):
+                            text = page.extract_text() or ""
+                            if query.lower() in text.lower():
+                                results.append(f"[PDF: {name}, page {page_num+1}] {text[:500]}")
                 except Exception as e:
-                    logger.error(f"Error reading PDF {file}: {str(e)}")
+                    logger.error(f"Error reading S3 PDF {key}: {e}")
                     continue
-            
-            # Handle Pages files (.pages)
-            elif ext == '.pages':
+
+            elif ext == '.pages' or key.endswith('.pages'):
                 try:
-                    content = _extract_text_from_pages(file_path)
+                    data = _get_s3_object_bytes(key)
+                    content = _extract_text_from_pages_bytes(data)
                     if query.lower() in content.lower():
-                        results.append(f"[Pages: {file}] {content[:500]}")
+                        results.append(f"[Pages: {name}] {content[:500]}")
                 except Exception as e:
-                    logger.error(f"Error reading Pages file {file}: {str(e)}")
+                    logger.error(f"Error reading S3 Pages file {key}: {e}")
                     continue
-        
+
         if results:
             return "\n\n".join(results)
         else:
-            # No matching content found, but list what's available
-            available = _get_available_documents()
+            available = _get_available_documents_s3()
             return f"No matching content found for '{query}'.\n{available}"
     except Exception as e:
-        logger.error(f"Error in search_pdfs: {str(e)}")
+        logger.error(f"Error in search_pdfs (S3): {str(e)}")
         return f"Error searching documents: {str(e)}"
 
 
-# 🖼️ Vision analysis - detect objects and people
-def _analyze_image_with_vision(image_path: str) -> str:
-    """Analyze an image using Gemini's vision capabilities to detect objects, people, and other elements."""
+def _analyze_image_with_vision_bytes(image_bytes: bytes, mime_type: str) -> str:
     try:
-        # Read and prepare the image
-        with open(image_path, 'rb') as img_file:
-            image_data = base64.standard_b64encode(img_file.read()).decode('utf-8')
-        
-        # Determine MIME type from file extension
-        ext = os.path.splitext(image_path)[1].lower()
-        mime_type_map = {
-            '.jpg': 'image/jpeg',
-            '.jpeg': 'image/jpeg',
-            '.png': 'image/png',
-            '.gif': 'image/gif',
-            '.bmp': 'image/bmp',
-            '.webp': 'image/webp',
-        }
-        mime_type = mime_type_map.get(ext, 'image/jpeg')
-        
-        # Use Gemini to analyze the image
+        image_data = base64.standard_b64encode(image_bytes).decode('utf-8')
         client = genai.Client()
         response = client.models.generate_content(
             model='gemini-2.5-flash',
@@ -168,7 +178,7 @@ def _analyze_image_with_vision(image_path: str) -> str:
                 }
             ]
         )
-        
+
         if response.candidates:
             return response.candidates[0].content.parts[0].text
         return "No analysis available"
@@ -177,99 +187,106 @@ def _analyze_image_with_vision(image_path: str) -> str:
         return f"Vision analysis error: {str(e)}"
 
 
-# 🖼️ Search images - OCR + vision analysis
 def search_images(query: str) -> str:
-    """Search through images using OCR and vision analysis to detect objects, people, and text."""
     results = []
-    
     try:
-        img_dir = "data/images"
-        if not os.path.exists(img_dir):
-            return "Images directory not found"
-        
-        images = [f for f in os.listdir(img_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp'))]
-        if not images:
-            return "No images available in data/images/"
-        
-        for file in sorted(images):
-            file_path = os.path.join(img_dir, file)
-            result_entry = f"\n📷 {file}:\n"
+        objs = _list_s3_objects(Config.S3_PREFIX_IMAGES)
+        if not objs:
+            return "No images available in S3 images/"
+
+        for o in sorted(objs, key=lambda x: x.get('Key', '')):
+            key = o.get('Key')
+            if not key:
+                continue
+            name = os.path.basename(key)
+            result_entry = f"\n📷 {name}:\n"
             match_found = False
-            
-            # 1. OCR-based text search
+
             try:
-                img = Image.open(file_path)
+                data = _get_s3_object_bytes(key)
+                img = Image.open(BytesIO(data))
                 ocr_text = pytesseract.image_to_string(img)
-                
                 if ocr_text and query.lower() in ocr_text.lower():
                     result_entry += f"  [OCR Text Match] {ocr_text[:300]}\n"
                     match_found = True
             except Exception as e:
-                logger.error(f"Error running OCR on {file}: {str(e)}")
-            
-            # 2. Vision-based object and people detection
+                logger.error(f"Error running OCR on S3 image {key}: {e}")
+
             try:
-                vision_analysis = _analyze_image_with_vision(file_path)
+                ext = os.path.splitext(name)[1].lower()
+                mime_map = {'.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.bmp': 'image/bmp', '.webp': 'image/webp'}
+                mime = mime_map.get(ext, 'image/jpeg')
+                vision_analysis = _analyze_image_with_vision_bytes(data, mime)
                 result_entry += f"  [Vision Analysis]\n{vision_analysis}\n"
-                
-                # Check if query matches vision analysis (for objects, people, etc.)
                 if query.lower() in vision_analysis.lower():
                     match_found = True
             except Exception as e:
-                logger.error(f"Error with vision analysis for {file}: {str(e)}")
-            
-            if match_found or not results:  # Include first image's analysis even if no match
+                logger.error(f"Error with vision analysis for S3 image {key}: {e}")
+
+            if match_found or not results:
                 results.append(result_entry)
-        
-        return "".join(results) if results else "No matching content found"
+
+        if results:
+            return "\n\n".join(results)
+        else:
+            return "No matching images found"
     except Exception as e:
-        logger.error(f"Error in search_images: {str(e)}")
+        logger.error(f"Error in search_images (S3): {str(e)}")
         return f"Error searching images: {str(e)}"
 
 
-# � Detect objects and people in images
-def detect_objects_and_people(query: str = "all") -> str:
-    """Analyze all images in data/images to detect and count people, objects, and other elements."""
-    results = []
-    
+def _analyze_image_with_vision(image_path: str) -> str:
     try:
-        img_dir = "data/images"
-        if not os.path.exists(img_dir):
-            return "Images directory not found"
-        
-        images = [f for f in os.listdir(img_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp'))]
-        if not images:
-            return "No images available in data/images/"
-        
-        for file in sorted(images):
-            file_path = os.path.join(img_dir, file)
-            
+        # Compatibility shim: support local path or s3://bucket/key
+        if image_path.startswith('s3://') and _s3:
+            # image_path format: s3://bucket/key or s3://key
+            parts = image_path.split('s3://')[-1]
+            key = parts.split('/', 1)[1] if '/' in parts else parts
+            data = _get_s3_object_bytes(key)
+            return _analyze_image_with_vision_bytes(data, 'image/jpeg')
+        elif os.path.exists(image_path):
+            with open(image_path, 'rb') as f:
+                data = f.read()
+                return _analyze_image_with_vision_bytes(data, 'image/jpeg')
+        else:
+            return "Image not found"
+    except Exception as e:
+        logger.error(f"Failed to analyze image {image_path}: {e}")
+        return "Analysis failed"
+
+
+def detect_objects_and_people(query: str = "all") -> str:
+    results = []
+    try:
+        objs = _list_s3_objects(Config.S3_PREFIX_IMAGES)
+        if not objs:
+            return "No images available in S3 images/"
+
+        for o in sorted(objs, key=lambda x: x.get('Key', '')):
+            key = o.get('Key')
+            if not key:
+                continue
+            name = os.path.basename(key)
             try:
-                # Use vision analysis to detect objects and people
-                analysis = _analyze_image_with_vision(file_path)
-                result = f"\n📷 {file}:\n{analysis}"
-                
-                # Filter results if specific query provided
-                if query.lower() != "all" and query.lower() not in analysis.lower():
+                data = _get_s3_object_bytes(key)
+                analysis = _analyze_image_with_vision_bytes(data, 'image/jpeg')
+                if query.lower() != 'all' and query.lower() not in analysis.lower():
                     continue
-                
-                results.append(result)
+                results.append(f"\n📷 {name}:\n{analysis}")
             except Exception as e:
-                logger.error(f"Error analyzing {file}: {str(e)}")
-                results.append(f"\n📷 {file}: Error - {str(e)}")
-        
-        if not results and query.lower() != "all":
+                logger.error(f"Error analyzing {key}: {str(e)}")
+                results.append(f"\n📷 {name}: Error - {str(e)}")
+
+        if not results and query.lower() != 'all':
             return f"No images found matching '{query}'. Run with 'all' to see all analyses."
-        
+
         return "".join(results) if results else "No images available"
     except Exception as e:
         logger.error(f"Error in detect_objects_and_people: {str(e)}")
         return f"Error detecting objects: {str(e)}"
 
 
-# �🔗 Extract links
 def extract_links(text: str) -> str:
-    """Extract URLs from the given text."""
     try:
         links = re.findall(r'https?://\S+', text)
         return "\n".join(links) if links else "No links found"

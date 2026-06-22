@@ -18,8 +18,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Create data directories
-RUN mkdir -p data/pdfs data/images
+# No local data directories created: storage is S3-backed in production
 
 # Expose FastAPI port
 EXPOSE 8001

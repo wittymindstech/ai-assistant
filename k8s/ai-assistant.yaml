@@ -44,9 +44,7 @@ spec:
             configMapKeyRef:
               name: ai-assistant-config
               key: KAFKA_CONSUMER_GROUP
-        volumeMounts:
-        - name: data-volume
-          mountPath: /app/data
+        # In production use S3 for data storage; remove local PVC mounts to rely on object storage.
         livenessProbe:
           httpGet:
             path: /queue
@@ -59,10 +57,7 @@ spec:
             port: 8001
           initialDelaySeconds: 5
           periodSeconds: 5
-      volumes:
-      - name: data-volume
-        persistentVolumeClaim:
-          claimName: ai-assistant-pvc
+      # No local volumes required when using S3-backed storage.
 ---
 apiVersion: v1
 kind: Service

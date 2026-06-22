@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Optional, Any
 
 from .agent import query_agent_with_usage
+from guardrails import GuardRailViolation, enforce_prompt_guardrails
 from .kafka_client import (
     build_task_payload,
     create_consumer,
@@ -79,6 +80,11 @@ class PromptQueueManager:
         logger.info("Prompt queue manager stopped")
 
     async def enqueue(self, prompt: str, assistant_id: str = 'default', session_id: str = 'default') -> PromptTask:
+        try:
+            enforce_prompt_guardrails(prompt)
+        except GuardRailViolation as e:
+            raise ValueError(f"Prompt rejected by guard rails: {e}")
+
         request_id = str(uuid.uuid4())
         task = PromptTask(
             request_id=request_id,
@@ -115,6 +121,7 @@ class PromptQueueManager:
             task.status = 'processing'
             try:
                 logger.info(f"Processing queued prompt {request_id}")
+                enforce_prompt_guardrails(task.prompt)
                 task.result = await query_agent_with_usage(
                     task.prompt,
                     user_id=task.assistant_id,
@@ -126,6 +133,10 @@ class PromptQueueManager:
                     'session_id': task.session_id,
                 }
                 await self._publish_response(task)
+            except GuardRailViolation as exc:
+                logger.warning(f"Queued prompt {request_id} blocked by guard rails: {exc}")
+                task.error = str(exc)
+                task.status = 'failed'
             except Exception as exc:
                 logger.error(f"Queued prompt {request_id} failed: {exc}", exc_info=True)
                 task.error = str(exc)
@@ -169,6 +180,7 @@ class PromptQueueManager:
 
             task.status = 'processing'
             logger.info(f"Processing Kafka prompt {request_id}")
+            enforce_prompt_guardrails(task.prompt)
             task.result = await query_agent_with_usage(
                 task.prompt,
                 user_id=task.assistant_id,
@@ -180,6 +192,11 @@ class PromptQueueManager:
                 'session_id': task.session_id,
             }
             await self._publish_response(task)
+        except GuardRailViolation as exc:
+            logger.warning(f"Kafka prompt {request_id} blocked by guard rails: {exc}")
+            if request_id and self.tasks.get(request_id):
+                self.tasks[request_id].error = str(exc)
+                self.tasks[request_id].status = 'failed'
         except Exception as exc:
             logger.error(f"Kafka task {payload} failed: {exc}", exc_info=True)
             if isinstance(payload, dict):

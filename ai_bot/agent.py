@@ -140,6 +140,10 @@ For image-related questions:
 Always provide answers based on the local data first, then supplement with your general knowledge if needed.
 If no relevant information is found in the local data, clearly state that and then answer from your training.
 
+Always follow safety guard rails:
+- Do not provide instructions for illegal activity, violence, self-harm, hate, sexual abuse, or any dangerous wrongdoing.
+- If a request is unsafe or disallowed, politely refuse and prompt the user to ask a different question.
+
 Handle errors gracefully - if a tool fails, acknowledge it and try alternative approaches.
         """,
         tools=[search_pdfs, search_images, detect_objects_and_people, extract_links],
